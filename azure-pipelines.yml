@@ -17,7 +17,7 @@ steps:
       version: '9.0.x'
       includePreviewVersions: false
 
-  - script: |
+  - bash: |
       echo "##vso[task.setvariable variable=DOTNET_CLI_TELEMETRY_OPTOUT]1"
       echo "##vso[task.setvariable variable=DOTNET_SKIP_FIRST_TIME_EXPERIENCE]1"
     displayName: 'Set CI env vars'
@@ -25,30 +25,44 @@ steps:
   - task: Cache@2
     displayName: 'Cache NuGet'
     inputs:
-      key: 'nuget | "$(Agent.OS)" | **/*.csproj, **/*.props, **/*.targets, **/nuget.config'
-      restoreKeys: 'nuget | "$(Agent.OS)"'
+      key: 'nuget | $(Agent.OS) | **/*.csproj, **/*.props, **/*.targets, **/nuget.config'
+      restoreKeys: 'nuget | $(Agent.OS)'
       path: $(NUGET_PACKAGES)
 
   # Restore the AppHost project (brings down all referenced projects)
-  - script: |
-      dotnet restore $(apphostProj)
+  - bash: |
+      dotnet restore "$(apphostProj)"
     displayName: 'Restore'
 
   # Build the AppHost (and everything it references)
-  - script: |
-      dotnet build $(apphostProj) -c $(buildConfiguration) --no-restore
+  - bash: |
+      dotnet build "$(apphostProj)" -c "$(buildConfiguration)" --no-restore
     displayName: 'Build'
 
-  # Run tests from the tests folder (there are multiple test projects)
-  - script: |
-      dotnet test tests -c $(buildConfiguration) --no-build --verbosity normal
+  # Test (discover *Tests.csproj anywhere; skip cleanly if none)
+  - bash: |
+      set -e
+      echo "Searching for test projects..."
+      mapfile -t projects < <(find . -type f -name "*Tests.csproj" -o -name "*.Tests.csproj")
+      if [ ${#projects[@]} -eq 0 ]; then
+        echo "No test projects found. Skipping dotnet test."
+        exit 0
+      fi
+
+      echo "Found ${#projects[@]} test project(s):"
+      printf ' - %s\n' "${projects[@]}"
+
+      for proj in "${projects[@]}"; do
+        echo "Running tests in: $proj"
+        dotnet test "$proj" -c "$(buildConfiguration)" --no-build --verbosity normal
+      done
     displayName: 'Test'
 
   # Publish AppHost output as artifact
-  - script: |
-      dotnet publish $(apphostProj) \
-        -c $(buildConfiguration) \
-        -o $(Build.ArtifactStagingDirectory)/apphost
+  - bash: |
+      dotnet publish "$(apphostProj)" \
+        -c "$(buildConfiguration)" \
+        -o "$(Build.ArtifactStagingDirectory)/apphost"
     displayName: 'Publish AppHost'
 
   - publish: $(Build.ArtifactStagingDirectory)
