@@ -10,6 +10,10 @@ variables:
   buildConfiguration: 'Release'
   apphostProj: 'src/eShop.AppHost/eShop.AppHost.csproj'
   nugetCacheDir: '$(Pipeline.Workspace)/.nuget/packages'
+  # Azure Artifacts feed URL
+  feedUrl: 'https://pkgs.dev.azure.com/konnecttransit/_packaging/konnecttransit/nuget/v3/index.json'
+  # Package version (bump automatically per build)
+  packageVersion: '1.0.$(Build.BuildId)'
 
 steps:
   - task: UseDotNet@2
@@ -23,7 +27,11 @@ steps:
       echo "##vso[task.setvariable variable=DOTNET_SKIP_FIRST_TIME_EXPERIENCE]1"
     displayName: 'Set CI env vars'
 
-  # NuGet package cache (path MUST be a real value, not an undefined variable)
+  # Authenticate the agent to Azure Artifacts (for restore + push)
+  - task: NuGetAuthenticate@1
+    displayName: 'Authenticate to Azure Artifacts'
+
+  # NuGet package cache (must be a real path)
   - task: Cache@2
     displayName: 'Cache NuGet'
     inputs:
@@ -31,7 +39,6 @@ steps:
       restoreKeys: 'nuget | $(Agent.OS)'
       path: '$(nugetCacheDir)'
 
-  # Ensure the cache directory exists before restore
   - bash: |
       mkdir -p "$(nugetCacheDir)"
     displayName: 'Ensure cache dir'
@@ -69,7 +76,36 @@ steps:
     env:
       NUGET_PACKAGES: '$(nugetCacheDir)'
 
-  # Publish AppHost output as artifact
+  # -------------------------------
+  # NEW: Pack + Push to Artifacts
+  # -------------------------------
+
+  # Pick a packable library project (example: WebAppComponents)
+  # If a project isn't packable by default, add /p:IsPackable=true
+  - bash: |
+      mkdir -p "$(Build.ArtifactStagingDirectory)/packages"
+      dotnet pack src/WebAppComponents/WebAppComponents.csproj \
+        -c "$(buildConfiguration)" \
+        -o "$(Build.ArtifactStagingDirectory)/packages" \
+        /p:ContinuousIntegrationBuild=true \
+        /p:Version="$(packageVersion)"
+      echo "Packages created:" && ls -la "$(Build.ArtifactStagingDirectory)/packages"
+    displayName: 'Pack NuGet package(s)'
+    env:
+      NUGET_PACKAGES: '$(nugetCacheDir)'
+
+  - bash: |
+      dotnet nuget push "$(Build.ArtifactStagingDirectory)/packages/*.nupkg" \
+        --source "$(feedUrl)" \
+        --api-key azdo
+    displayName: 'Push packages to Azure Artifacts'
+
+  # (Optional) Publish the packages folder as a pipeline artifact too
+  - publish: $(Build.ArtifactStagingDirectory)/packages
+    artifact: packages
+    displayName: 'Publish packages as pipeline artifact'
+
+  # Publish AppHost output as artifact (your existing output)
   - bash: |
       dotnet publish "$(apphostProj)" \
         -c "$(buildConfiguration)" \
