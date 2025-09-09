@@ -9,6 +9,7 @@ pool:
 variables:
   buildConfiguration: 'Release'
   apphostProj: 'src/eShop.AppHost/eShop.AppHost.csproj'
+  nugetCacheDir: '$(Pipeline.Workspace)/.nuget/packages'
 
 steps:
   - task: UseDotNet@2
@@ -22,24 +23,34 @@ steps:
       echo "##vso[task.setvariable variable=DOTNET_SKIP_FIRST_TIME_EXPERIENCE]1"
     displayName: 'Set CI env vars'
 
+  # NuGet package cache (path MUST be a real value, not an undefined variable)
   - task: Cache@2
     displayName: 'Cache NuGet'
     inputs:
       key: 'nuget | $(Agent.OS) | **/*.csproj, **/*.props, **/*.targets, **/nuget.config'
       restoreKeys: 'nuget | $(Agent.OS)'
-      path: $(NUGET_PACKAGES)
+      path: '$(nugetCacheDir)'
 
-  # Restore the AppHost project (brings down all referenced projects)
+  # Ensure the cache directory exists before restore
+  - bash: |
+      mkdir -p "$(nugetCacheDir)"
+    displayName: 'Ensure cache dir'
+
+  # Restore (write to the cache dir)
   - bash: |
       dotnet restore "$(apphostProj)"
     displayName: 'Restore'
+    env:
+      NUGET_PACKAGES: '$(nugetCacheDir)'
 
-  # Build the AppHost (and everything it references)
+  # Build
   - bash: |
       dotnet build "$(apphostProj)" -c "$(buildConfiguration)" --no-restore
     displayName: 'Build'
+    env:
+      NUGET_PACKAGES: '$(nugetCacheDir)'
 
-  # Test (discover *Tests.csproj anywhere; skip cleanly if none)
+  # Test – discover *Tests.csproj and run; skip if none
   - bash: |
       set -e
       echo "Searching for test projects..."
@@ -48,15 +59,15 @@ steps:
         echo "No test projects found. Skipping dotnet test."
         exit 0
       fi
-
       echo "Found ${#projects[@]} test project(s):"
       printf ' - %s\n' "${projects[@]}"
-
       for proj in "${projects[@]}"; do
         echo "Running tests in: $proj"
         dotnet test "$proj" -c "$(buildConfiguration)" --no-build --verbosity normal
       done
     displayName: 'Test'
+    env:
+      NUGET_PACKAGES: '$(nugetCacheDir)'
 
   # Publish AppHost output as artifact
   - bash: |
@@ -64,6 +75,8 @@ steps:
         -c "$(buildConfiguration)" \
         -o "$(Build.ArtifactStagingDirectory)/apphost"
     displayName: 'Publish AppHost'
+    env:
+      NUGET_PACKAGES: '$(nugetCacheDir)'
 
   - publish: $(Build.ArtifactStagingDirectory)
     artifact: drop
