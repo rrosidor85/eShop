@@ -8,7 +8,7 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
-  solution: 'src/eShop.sln'
+  apphostProj: 'src/eShop.AppHost/eShop.AppHost.csproj'
 
 steps:
   - task: UseDotNet@2
@@ -29,20 +29,24 @@ steps:
       restoreKeys: 'nuget | "$(Agent.OS)"'
       path: $(NUGET_PACKAGES)
 
+  # Restore the AppHost project (brings down all referenced projects)
   - script: |
-      dotnet restore $(solution)
+      dotnet restore $(apphostProj)
     displayName: 'Restore'
 
+  # Build the AppHost (and everything it references)
   - script: |
-      dotnet build $(solution) -c $(buildConfiguration) --no-restore
+      dotnet build $(apphostProj) -c $(buildConfiguration) --no-restore
     displayName: 'Build'
 
+  # Run tests from the tests folder (there are multiple test projects)
   - script: |
-      dotnet test $(solution) -c $(buildConfiguration) --no-build --verbosity normal
+      dotnet test tests -c $(buildConfiguration) --no-build --verbosity normal
     displayName: 'Test'
 
+  # Publish AppHost output as artifact
   - script: |
-      dotnet publish src/eShop.AppHost/eShop.AppHost.csproj \
+      dotnet publish $(apphostProj) \
         -c $(buildConfiguration) \
         -o $(Build.ArtifactStagingDirectory)/apphost
     displayName: 'Publish AppHost'
