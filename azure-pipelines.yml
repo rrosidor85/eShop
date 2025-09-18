@@ -1,7 +1,19 @@
+# eShop CI / PR validation
+# - PRs: build & test only (no package publishing)
+# - main (non-PR): build, test, pack, push to Azure Artifacts
+
 trigger:
-  - main
+  branches:
+    include:
+      - main
+
 pr:
-  - main
+  branches:
+    include:
+      - main
+      - develop
+      - feature/*
+      - hotfix/*
 
 pool:
   vmImage: 'ubuntu-latest'
@@ -16,6 +28,10 @@ variables:
   packageVersion: '1.0.$(Build.BuildId)'
 
 steps:
+  # Always check out the repo being built/validated
+  - checkout: self
+    persistCredentials: true
+
   - task: UseDotNet@2
     displayName: 'Use .NET 9 SDK'
     inputs:
@@ -43,7 +59,7 @@ steps:
       mkdir -p "$(nugetCacheDir)"
     displayName: 'Ensure cache dir'
 
-  # Restore (write to the cache dir)
+  # Restore
   - bash: |
       dotnet restore "$(apphostProj)"
     displayName: 'Restore'
@@ -77,11 +93,11 @@ steps:
       NUGET_PACKAGES: '$(nugetCacheDir)'
 
   # -------------------------------
-  # NEW: Pack + Push to Artifacts
+  # Pack + Push to Artifacts (CI only)
+  #   - Skip for PRs
+  #   - Only run on main branch
   # -------------------------------
 
-  # Pick a packable library project (example: WebAppComponents)
-  # If a project isn't packable by default, add /p:IsPackable=true
   - bash: |
       mkdir -p "$(Build.ArtifactStagingDirectory)/packages"
       dotnet pack src/WebAppComponents/WebAppComponents.csproj \
@@ -91,6 +107,7 @@ steps:
         /p:Version="$(packageVersion)"
       echo "Packages created:" && ls -la "$(Build.ArtifactStagingDirectory)/packages"
     displayName: 'Pack NuGet package(s)'
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     env:
       NUGET_PACKAGES: '$(nugetCacheDir)'
 
@@ -99,13 +116,16 @@ steps:
         --source "$(feedUrl)" \
         --api-key azdo
     displayName: 'Push packages to Azure Artifacts'
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
 
-  # (Optional) Publish the packages folder as a pipeline artifact too
+  # (Optional) Publish the packages folder as a pipeline artifact (useful for PRs too)
   - publish: $(Build.ArtifactStagingDirectory)/packages
     artifact: packages
     displayName: 'Publish packages as pipeline artifact'
+    # publish even on PRs if you want approvers to download and inspect
+    condition: succeeded()
 
-  # Publish AppHost output as artifact (your existing output)
+  # Publish AppHost output as artifact
   - bash: |
       dotnet publish "$(apphostProj)" \
         -c "$(buildConfiguration)" \
